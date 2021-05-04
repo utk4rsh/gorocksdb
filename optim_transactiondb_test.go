@@ -70,6 +70,81 @@ func TestOptimisticTransactionDBCRUD(t *testing.T) {
 	ensure.True(t, v7.Data() == nil)
 }
 
+func TestOptimisticTransactionDBCFCRUD(t *testing.T) {
+
+	dir, err := ioutil.TempDir("", "gorocksoptimistictransactiondb-TestOptimisticTransactionDBCFCRUD")
+	ensure.Nil(t, err)
+
+	opts := NewDefaultOptions()
+	opts.SetCreateIfMissing(true)
+	opts.SetCreateIfMissingColumnFamilies(true)
+
+	cfNames := []string{"default", "ttl"}
+	cfOptions := []*Options{opts, opts}
+
+	db, cfh, err := OpenOptimisticTransactionDbColumnFamilies(opts, dir, cfNames, cfOptions)
+	ensure.Nil(t, err)
+
+	defer db.Close()
+	defer cfh[0].Destroy()
+	defer cfh[1].Destroy()
+
+	var (
+		givenTxnKey  = []byte("hello2")
+		givenTxnKey2 = []byte("hello3")
+		givenTxnVal1 = []byte("whatawonderful")
+		wo           = NewDefaultWriteOptions()
+		ro           = NewDefaultReadOptions()
+		to           = NewDefaultOptimisticTransactionOptions()
+	)
+
+	bdb := db.GetBaseDb()
+
+	for _, cf := range cfh {
+
+		// transaction
+		txn := db.TransactionBegin(wo, to, nil)
+		defer txn.Destroy()
+		// create
+		ensure.Nil(t, txn.PutCF(cf, givenTxnKey, givenTxnVal1))
+		v4, err := txn.GetCF(ro, cf, givenTxnKey)
+		defer v4.Free()
+		ensure.Nil(t, err)
+		ensure.DeepEqual(t, v4.Data(), givenTxnVal1)
+		ensure.Nil(t, txn.Commit())
+
+		v5, err := bdb.GetCF(ro, cf, givenTxnKey)
+		defer v5.Free()
+		ensure.Nil(t, err)
+		ensure.DeepEqual(t, v5.Data(), givenTxnVal1)
+
+		// transaction
+		txn2 := db.TransactionBegin(wo, to, nil)
+		defer txn2.Destroy()
+		// create
+		ensure.Nil(t, txn2.PutCF(cf, givenTxnKey2, givenTxnVal1))
+		// rollback
+		ensure.Nil(t, txn2.Rollback())
+
+		v6, err := bdb.GetCF(ro, cf, givenTxnKey2)
+		defer v6.Free()
+		ensure.Nil(t, err)
+		ensure.True(t, v6.Data() == nil)
+
+		// transaction
+		txn3 := db.TransactionBegin(wo, to, nil)
+		defer txn3.Destroy()
+		// delete
+		ensure.Nil(t, txn3.DeleteCF(cf, givenTxnKey))
+		ensure.Nil(t, txn3.Commit())
+
+		v7, err := bdb.Get(ro, givenTxnKey)
+		defer v7.Free()
+		ensure.Nil(t, err)
+		ensure.True(t, v7.Data() == nil)
+	}
+}
+
 func TestOptimisticTransactionDBConflicts(t *testing.T) {
 	db := newTestOptimisticTransactionDB(t, "TestOptimisticConflicts")
 	defer db.Close()
